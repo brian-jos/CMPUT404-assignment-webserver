@@ -1,5 +1,7 @@
 #  coding: utf-8 
-import socketserver, os
+import socketserver, os, sys
+from datetime import datetime
+from urllib.parse import unquote
 
 # Copyright 2013 Abram Hindle, Eddie Antonio Santos
 # 
@@ -29,7 +31,8 @@ import socketserver, os
 
 class MyWebServer(socketserver.BaseRequestHandler):
     
-    def handle(self): # Brian Rogador
+    # Brian Rogador
+    def handle(self):
         self.data = self.request.recv(1024).strip()
         print ("Got a request of: %s\n" % self.data)
 
@@ -37,11 +40,16 @@ class MyWebServer(socketserver.BaseRequestHandler):
 
         request_list = str(self.data).split() # split request into list by whitespaces
         method = request_list[0][2:] # indexes GET/POST/PUT/DELETE, excludes b'
-        file_path = request_list[1][1:] # indexes file path, excludes /
+        file_path = unquote(request_list[1][1:]) # indexes file path, excludes /
+
+        date_string = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S") # get current utc time in RFC 2616 format
 
         # check for methods other than GET
         if (method != "GET"): # check for method other than GET
-            self.request.sendall(bytearray("HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n",'utf-8'))
+            self.request.sendall(bytearray( "HTTP/1.1 405 Method Not Allowed\r\n" + \
+                                           f"Date: {date_string} GMT\r\n" + \
+                                            "Connection: close\r\n" + \
+                                            "\r\n",'utf-8'))
             return
 
         # if file path is empty, turn it into /
@@ -51,22 +59,47 @@ class MyWebServer(socketserver.BaseRequestHandler):
         # https://stackoverflow.com/a/3926550
         # restrict ".." as a file to prevent navigation, but allow "..." (... is not reserved and is a viable file name)
         if (file_path.find("..") > -1 and file_path.find("...") == -1):
-            self.request.sendall(bytearray("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n",'utf-8'))
+            self.request.sendall(bytearray( "HTTP/1.1 404 Not Found\r\n" + \
+                                           f"Date: {date_string} GMT\r\n" + \
+                                            "Connection: close\r\n" + \
+                                            "\r\n",'utf-8'))
             return
 
-        # https://stackoverflow.com/questions/3207219/how-do-i-list-all-files-of-a-directory
+        # https://stackoverflow.com/a/3204819
         # check if file path ends in a directory
-        is_directory = os.path.isdir(base_directory + file_path) 
+        is_directory = os.path.isdir(base_directory + file_path)
 
         # for directory file paths that don't end with /, redirect with 301
         if (is_directory and file_path[-1] != "/"):
-            self.request.sendall(bytearray(f"HTTP/1.1 301 Moved Permanently\r\nLocation: {file_path}/\r\nConnection: close\r\n\r\n",'utf-8'))
+            try: # attempt to open and read the file contents
+                f = open(base_directory + file_path + "/index.html")
+                content = f.read()
+                f.close()
+            except: # send 404
+                self.request.sendall(bytearray( "HTTP/1.1 404 Not Found\r\n" + \
+                                               f"Date: {date_string} GMT\r\n" + \
+                                                "Connection: close\r\n" + \
+                                                "\r\n",'utf-8'))
+                return
+
+            # send 301
+            self.request.sendall(bytearray( "HTTP/1.1 301 Moved Permanently\r\n" + \
+                                           f"Date: {date_string} GMT\r\n" + \
+                                           f"Location: {file_path}/\r\n" + \
+                                           f"Content-Length: {len(content)}\r\n" + \
+                                            "Connection: close\r\n" + \
+                                            "Content-Type: text/html; charset=utf-8\r\n" + \
+                                            "\r\n",'utf-8'))
+            
+            # send body
+            for i in content:
+                self.request.sendall(bytearray(i,'utf-8'))
             return
         
         # for root directories, use index.html
         if (is_directory and file_path[-1] == "/"):
             file_path += "index.html"
-        
+
         # try to extract the file extension
         file_extension = ""
         if (file_path.rfind(".") > file_path.rfind("/")): # look for a file extension before the last /
@@ -77,22 +110,32 @@ class MyWebServer(socketserver.BaseRequestHandler):
             f = open(base_directory + file_path)
             content = f.read()
             f.close()
-        except:
-            self.request.sendall(bytearray("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n",'utf-8'))
+        except: # send 404
+            self.request.sendall(bytearray( "HTTP/1.1 404 Not Found\r\n" + \
+                                           f"Date: {date_string} GMT\r\n" + \
+                                            "Connection: close\r\n" + \
+                                            "\r\n",'utf-8'))
             return
 
         # use supported mimetype if .html or .css
-        mimetype = "text/plain"
+        mimetype = "application/octet-stream"
         if (file_extension == ".html"):
             mimetype = "text/html"
         elif (file_extension == ".css"):
             mimetype = "text/css"
 
-        # send content
+        # send 200 header
         # https://docs.python-requests.org/en/v0.10.7/user/quickstart/#make-a-post-request
         # https://stackoverflow.com/a/28056437
         # https://stackoverflow.com/questions/55895197/python-socket-programming-simple-web-server-trying-to-access-a-html-file-from-s
-        self.request.sendall(bytearray(f"HTTP/1.1 200 OK\r\nContent-Type: {mimetype}\r\nConnection: close\r\n\r\n",'utf-8'))
+        self.request.sendall(bytearray( "HTTP/1.1 200 OK\r\n" + \
+                                       f"Date: {date_string} GMT\r\n" + \
+                                       f"Content-Length: {len(content)}\r\n" + \
+                                        "Connection: close\r\n" + \
+                                       f"Content-Type: {mimetype}; charset=utf-8\r\n" + \
+                                        "\r\n",'utf-8'))
+        
+        # send body
         for i in content:
             self.request.sendall(bytearray(i,'utf-8'))
 
